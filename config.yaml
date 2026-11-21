@@ -1,0 +1,33 @@
+# H Naught Research 001 · collection config. Frozen values are part of the pre-registration:
+# change them only in a new, dated commit.
+
+cutoff_utc: "2026-11-01T00:00:00"   # exclusive: data up to the end of 2026-10-31 UTC
+
+filters:                            # pre-registered (research_design Section 3.3)
+  min_decided: 20                   # decided proposals per DAO (sensitivity: 10, 40)
+  min_median_voters: 10             # median voters per decided proposal (sensitivity: 5, 25)
+  min_span_days: 365                # first to last decided proposal
+  light_min_created_per_governor: 3 # only limits RPC calls in `select`; not a study filter
+
+bigquery:
+  project: "YOUR_GCP_PROJECT_ID"    # leave as is; set env HN_BQ_PROJECT instead (keeps it out of git)
+  max_bytes_billed: 3000000000000   # 3 TB hard cap per query; dry run shows the real figure
+  usd_per_tb: 6.25                  # on-demand price used only for the printed estimate [check your region]
+
+rpc:
+  min_interval_s: 0.05              # raise for rate-limited free tiers
+  log_chunk_blocks:                 # starting eth_getLogs range; halves automatically on provider limits
+    ethereum: 50000
+    arbitrum: 2000000
+    optimism: 500000
+
+chains:
+  ethereum:
+    rpc_env: ETH_RPC_URL            # must be an ARCHIVE endpoint (eth_call at the cutoff block)
+    bq_logs_table: bigquery-public-data.goog_blockchain_ethereum_mainnet_us.logs
+  arbitrum:
+    rpc_env: ARB_RPC_URL
+    bq_logs_table: bigquery-public-data.goog_blockchain_arbitrum_one_us.logs
+  optimism:
+    rpc_env: OP_RPC_URL
+    bq_logs_table: bigquery-public-data.goog_blockchain_optimism_mainnet_us.logs
