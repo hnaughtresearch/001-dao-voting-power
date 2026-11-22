@@ -1,0 +1,7 @@
+step,count
+daos_collected,22
+exact_decided>=20,20
+exact_median_voters>=10,19
+exact_span>=365d,19
+tier_A,13
+tier_B,6

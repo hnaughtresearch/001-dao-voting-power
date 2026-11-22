@@ -1,0 +1,10 @@
+step,count
+contracts_with_governor_events,871
+of_which_votes_but_no_standard_ProposalCreated (Tier B review),93
+governors_with_>=3_proposals_before_cutoff,400
+governors_token_unresolved (see unresolved_token.csv),101
+daos_after_grouping_by_token,234
+filter1_binding_executed>=1,207
+filter2_created>=20 (upper bound of decided),75
+filter3_median_votes>=10 (main governor),24
+filter4_span>=365d,22
