@@ -134,9 +134,9 @@ def test_validate_end_to_end(tmp_path, monkeypatch):
             fh.write(json.dumps(lg) + "\n")
     views = [
         {"proposal_id": "1", "state": "Executed", "tallies": {"for": "30", "against": "10", "abstain": "0"},
-         "quorum": "25", "created_block_ts": 1_600_000_000},
+         "quorum": "25", "quorum_variants": {"quorumVotes()": "25"}, "created_block_ts": 1_600_000_000},
         {"proposal_id": "2", "state": "Defeated", "tallies": {"for": "5", "against": "0", "abstain": "0"},
-         "quorum": "25", "created_block_ts": 1_640_000_000},
+         "quorum": "25", "quorum_variants": {"quorumVotes()": "25"}, "created_block_ts": 1_640_000_000},
     ]
     with gzip.open(d / "views.jsonl.gz", "wt") as fh:
         for v in views:
@@ -149,10 +149,9 @@ def test_validate_end_to_end(tmp_path, monkeypatch):
     validate.run(cfg)
     gv = __import__("pandas").read_csv(tmp_path / "data" / "processed" / "validation_governors.csv")
     row = gv.iloc[0]
-    assert row.tally_match == "2/2" and row.outcome_match == "2/2"
-    assert bool(row.generic_rule_reproduces) is True
+    assert bool(row.votes_verified) and bool(row.outcome_verified) and row.quorum_getter == "quorumVotes()"
     daos = __import__("pandas").read_csv(tmp_path / "data" / "processed" / "daos_final.csv")
-    assert daos.iloc[0].tier == "A"
+    assert daos.iloc[0].set == "A"
 
 
 # --- HyperSync scan output -> select / collect --------------------------------
@@ -237,3 +236,23 @@ def test_resolve_verify_matches_vote_weight():
     resolve._votes_at = lambda r, tok, voter, block: 29
     assert resolve._verify(rpc, GOV, "0x" + "11" * 20, "bravo", props, votes) == (0, 1)
     assert resolve._addr_topic(VOTER) == _voter_topic(VOTER)
+
+
+def test_detect_layout_finds_unique_positions():
+    words = {"1": [1, 7, 0, 30, 10, 0, 99], "2": [2, 7, 0, 5, 0, 0, 99]}
+    sums = {"1": {"for": 30, "against": 10, "abstain": 0}, "2": {"for": 5, "against": 0, "abstain": 0}}
+    assert validate.detect_layout(["1", "2"], words, sums) == {"for": 3, "against": 4, "abstain": None}
+    words["2"][4] = 3                                     # against no longer matches on proposal 2
+    assert validate.detect_layout(["1", "2"], words, sums) is None
+
+
+def test_outcome_rule_prefers_documented_getter_and_flags_ambiguity():
+    tallies = {"1": {"for": 50, "against": 10, "abstain": 0}, "2": {"for": 20, "against": 5, "abstain": 0}}
+    decided = [("1", "Executed"), ("2", "Defeated")]           # 2 fails quorum 40, not majority
+    qv = {"1": {"quorum(snapshot)": 0, "quorum(proposalId)": 40}, "2": {"quorum(snapshot)": 0, "quorum(proposalId)": 40}}
+    rule, getter, status = validate.find_outcome_rule("oz", "support=bravo&quorum=for,abstain", decided, qv, tallies)
+    assert (rule, getter, status) == ("majority_and_quorum", "quorum(proposalId)", "verified")
+    rule, getter, status = validate.find_outcome_rule(
+        "oz", "support=against,for&quorum=for&success=majority",
+        [("1", "Executed")], {"1": {"quorum(snapshot)": 40}}, tallies)
+    assert status == "ambiguous"                                # both majority rules fit one proposal

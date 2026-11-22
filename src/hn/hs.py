@@ -129,3 +129,53 @@ def run(cfg: dict, chains: list[str]) -> None:
     for ch in chains:
         print(f"== scan {ch}")
         asyncio.run(_scan_events(ch, cfg["chains"][ch]["hypersync_url"], token))
+
+
+# --- discovery: which events does a contract actually emit? -------------------------------------
+CANDIDATE_SIGNATURES = [
+    "ProposalCreated(uint256,address,address[],uint256[],string[],bytes[],uint256,uint256,string)",
+    "ProposalCreated(uint256,address,address[],uint256[],string[],bytes[],uint256,uint256,string,uint8)",
+    "ProposalCreated(uint256,address,address,bytes,uint256,uint256,string)",
+    "ProposalCreated(uint256,address,address,bytes,uint256,uint256,string,uint8)",
+    "VoteCast(address,uint256,uint8,uint256,string)",
+    "VoteCastWithParams(address,uint256,uint8,uint256,string,bytes)",
+    "VoteCast(address,uint256,bool,uint256)",
+    "ProposalExecuted(uint256)", "ProposalCanceled(uint256)", "ProposalQueued(uint256,uint256)",
+    "ProposalDeadlineUpdated(uint256,uint64)", "ProposalTypeUpdated(uint256,uint8)",
+    "ProposalTypeSet(uint8,uint16,uint16,string)", "ProposalTypeSet(uint256,uint16,uint16,string)",
+    "QuorumNumeratorUpdated(uint256,uint256)", "Upgraded(address)", "AdminChanged(address,address)",
+    "Initialized(uint8)", "Initialized(uint64)", "ManagerSet(address,address)",
+    "VotingDelaySet(uint256,uint256)", "VotingPeriodSet(uint256,uint256)",
+    "ProposalThresholdSet(uint256,uint256)", "TimelockChange(address,address)",
+]
+
+
+async def _inspect(url: str, token: str, addr: str, end: int | None):
+    from collections import Counter
+    hs = _hs()
+    c = _client(url, token)
+    end = end or await c.get_height()
+    counts, cur = Counter(), 0
+    sel = hs.LogSelection(address=[addr])
+    fields = hs.FieldSelection(log=[hs.LogField.TOPIC0])
+    while cur < end:
+        r = await c.get(hs.Query(from_block=cur, to_block=end, logs=[sel], field_selection=fields))
+        for lg in r.data.logs:
+            counts[(lg.topics or [None])[0]] += 1
+        if r.next_block <= cur:
+            break
+        cur = min(r.next_block, end)
+    return counts
+
+
+def inspect(cfg: dict, chain: str, addrs: list[str]) -> None:
+    from eth_hash.auto import keccak
+    token = os.environ.get("HYPERSYNC_TOKEN")
+    if not token:
+        raise SystemExit("set HYPERSYNC_TOKEN")
+    known = {"0x" + keccak(s.encode()).hex(): s for s in CANDIDATE_SIGNATURES}
+    for a in addrs:
+        counts = asyncio.run(_inspect(cfg["chains"][chain]["hypersync_url"], token, a.lower(), None))
+        print(f"\n== {chain} {a}: {sum(counts.values())} logs, {len(counts)} distinct events")
+        for t0, n in counts.most_common():
+            print(f"  {n:>9,}  {t0}  {known.get(t0, '?? unknown signature')}")

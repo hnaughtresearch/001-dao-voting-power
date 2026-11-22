@@ -32,7 +32,8 @@ ALL_TOPICS = list(TOPIC.values())
 
 # Proposal states: identical enum order in Bravo and OZ Governor.
 STATE = {0: "Pending", 1: "Active", 2: "Canceled", 3: "Defeated", 4: "Succeeded",
-         5: "Queued", 6: "Expired", 7: "Executed"}
+         5: "Queued", 6: "Expired", 7: "Executed",
+         8: "Vetoed", 9: "ObjectionPeriod", 10: "Updatable"}   # 8-10: Nouns V2/V3 only
 PASSED_STATES = {"Succeeded", "Queued", "Expired", "Executed"}
 DECIDED_STATES = PASSED_STATES | {"Defeated"}
 

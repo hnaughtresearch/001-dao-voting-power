@@ -1,0 +1,2 @@
+chain,governor,proposal_id,source_url,note
+ethereum,0x9d4c63565d5618310271bf3f3c01b2954c1d1639,57072833898817791797073691509906632211867496916826813977377920660331579547554,https://cactushq.xyz/gov/gitcoin/proposal/57072833898817791797073691509906632211867496916826813977377920660331579547554,"Gitcoin: liquid treasury moved from Governor to a Safe multisig; later governor votes are signalling. Proposals created after this proposal's ProposalExecuted block are excluded."

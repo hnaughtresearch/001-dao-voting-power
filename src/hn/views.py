@@ -87,3 +87,27 @@ def quorum(rpc: Rpc, gov: str, fam: str, snapshot: int | None, block) -> int | N
 def proposal_snapshot(rpc: Rpc, gov: str, pid: int, block) -> int | None:
     raw = _call(rpc, gov, FN["proposalSnapshot"], ["uint256"], [pid], block)
     return int.from_bytes(raw[:32], "big") if raw else None
+
+
+def struct_words(rpc: Rpc, gov: str, pid: int, block) -> list[int] | None:
+    """Raw 32-byte words of proposals(pid). Layout differs between Bravo forks; validate finds it."""
+    raw = _call(rpc, gov, FN["proposals"], ["uint256"], [pid], block)
+    if not raw:
+        return None
+    return [int.from_bytes(raw[i:i + 32], "big") for i in range(0, len(raw) - len(raw) % 32, 32)]
+
+
+def quorum_variants(rpc: Rpc, gov: str, pid: int, snap: int | None, block) -> dict[str, int]:
+    """Every quorum getter the contract answers: OZ quorum(timepoint), Agora GovernorV6
+    quorum(proposalId), Bravo quorumVotes(), Nouns quorumVotes(proposalId)."""
+    calls = [("quorum(proposalId)", FN["quorum"], ["uint256"], [pid]),
+             ("quorumVotes()", FN["quorumVotes"], (), ()),
+             ("quorumVotes(proposalId)", selector("quorumVotes(uint256)"), ["uint256"], [pid])]
+    if snap is not None:
+        calls.insert(0, ("quorum(snapshot)", FN["quorum"], ["uint256"], [snap]))
+    out = {}
+    for name, sel, types, args in calls:
+        raw = _call(rpc, gov, sel, types, args, block)
+        if raw and len(raw) >= 32:
+            out[name] = int.from_bytes(raw[:32], "big")
+    return out

@@ -77,7 +77,7 @@ def read_governor(cfg: dict, rpc: Rpc, chain: str, gov: str, cutoff_ts: int, ts:
         with gzip.open(vp, "rt") as fh:
             for l in fh:
                 r = json.loads(l)
-                if r.get("state") and r.get("tallies") and r.get("quorum") is not None:
+                if r.get("state") and "quorum_variants" in r:
                     keep.append(r)
         tmp = vp.with_suffix(".gz.tmp")
         with gzip.open(tmp, "wt") as fh:
@@ -92,11 +92,15 @@ def read_governor(cfg: dict, rpc: Rpc, chain: str, gov: str, cutoff_ts: int, ts:
             snap = views.proposal_snapshot(rpc, gov, pid, "latest") if fam == "oz" else p["start_block"]
             t = views.tallies(rpc, gov, fam, pid, "latest")
             q = views.quorum(rpc, gov, fam, snap, "latest")
+            words = views.struct_words(rpc, gov, pid, "latest")
+            qv = views.quorum_variants(rpc, gov, pid, snap, "latest")
             out.write(json.dumps({
                 "proposal_id": p["proposal_id"], "family": fam, "counting_mode": cm,
                 "state": views.state(rpc, gov, pid, "latest"),
                 "tallies": {k: str(v) for k, v in (t or {}).items()},
                 "snapshot": snap, "quorum": None if q is None else str(q),
+                "struct_words": None if words is None else [str(w) for w in words],
+                "quorum_variants": {k: str(v) for k, v in qv.items()},
                 "created_block": p["block"], "created_block_ts": p["created_ts"],
                 "read_at_block": head,
             }) + "\n")

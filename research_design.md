@@ -438,3 +438,19 @@ The pre-registered generic rule reads the counting rule from `COUNTING_MODE()`. 
 - `support=bravo,fractional` (GovernorCountingFractional): standard For/Against/Abstain support with optional fractional votes. The tally check still applies: any fractional vote not reflected in the decoded tallies fails it.
 
 These are implementation corrections, recorded here for transparency. Governors using other modes (for example `success=quorum`, `support=against,for`, or `params=modules`) remain Tier B.
+
+## Amendment 3 — verification levels, satellite governors, data-driven contract reading (2026-11-22)
+
+Registered after Gate B diagnostics and **before any concentration or outcome-sensitivity measure was computed**. The aim is correctness and completeness: no DAO is dropped for a reason that is a reading problem rather than a data problem.
+
+1. **Satellite governors.** Anyone can deploy a governor on a popular token, so "same voting token" can merge unrelated contracts into one DAO. Trigger: two governors on the OP token with a median of 1 voter outnumbered the main governor's proposals and pulled the DAO's median to 1. Rule: a governor belongs to its DAO only if its own median of distinct voters per decided proposal meets `min_median_voters` (10, the existing threshold). Excluded governors are listed in `excluded_governors.csv`.
+2. **Two verification levels replace the single Tier A/B split.** Concentration (H1, H3) and persistence (H4) need verified vote weights. Only outcome sensitivity (H2) also needs a verified counting rule.
+   - Set A, outcome-verified: tallies and outcomes reproduced on 100% of decided proposals. Used for H1 to H4.
+   - Set B, votes-verified: tallies reproduced on 100%, outcome rule not. Used for H1, H3 and H4.
+   - DAOs with unverified tallies are not analysed and are listed.
+3. **Contract reading is determined by the data and confirmed on every proposal.**
+   - **Tallies:** read from `proposalVotes()` or the Bravo `proposals()` struct. If neither matches, the unique struct position equal to the log sums on every decided proposal is used. This covers Bravo forks and Nouns-style layouts.
+   - **Quorum:** getters are tried in each family's documented order: `quorum(timepoint)`, `quorum(proposalId)` (Agora GovernorV6), `quorumVotes()`, `quorumVotes(proposalId)` (Nouns V2+). The first getter that reproduces every outcome is used. If two different counting rules both fit, the governor is marked ambiguous and is not outcome-verified.
+4. **Gitcoin binding exception implemented.** Proposals created after the block of the `ProposalExecuted` event of proposal 570728…7554 (treasury moved to a Safe multisig, executed 2026-04-23) are excluded (`config/binding_exceptions.csv`).
+5. **Nouns proposal states 8–10** (Vetoed, ObjectionPeriod, Updatable) are not decided states.
+6. **Optimism module proposals** are created through a different `ProposalCreated` event. Their signature is confirmed with `hn inspect` before they are added to the scan.
