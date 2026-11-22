@@ -13,13 +13,23 @@ def quorum_basis(fam: str, counting_mode: str | None) -> tuple[str, ...] | None:
     if fam == "bravo":
         return ("for",)
     if fam == "oz" and counting_mode:
-        q = parse_qs(counting_mode).get("quorum", [""])[0]
+        qs = parse_qs(counting_mode)
+        q = qs.get("quorum", [""])[0]
+        support = qs.get("support", [""])[0]
+        if support not in ("bravo", "bravo,fractional") or "counting" in qs or "success" in qs:
+            return None
+        if q == "bravo":                      # GovernorCompatibilityBravo: quorum counts For only
+            return ("for",)
         parts = tuple(p for p in q.split(",") if p)
-        support = parse_qs(counting_mode).get("support", [""])[0]
-        if support != "bravo" or not parts or not set(parts) <= {"for", "against", "abstain"}:
+        if not parts or not set(parts) <= {"for", "against", "abstain"}:
             return None
         return parts
     return None
+
+
+def is_election(counting_mode: str | None) -> bool:
+    """Candidate elections (e.g. counting=n-winners / counting=threshold) have no pass/fail outcome."""
+    return bool(counting_mode) and "counting" in parse_qs(counting_mode)
 
 
 def passes(t: dict, q: int, basis: tuple[str, ...], fam: str) -> bool:

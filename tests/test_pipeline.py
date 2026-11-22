@@ -76,6 +76,12 @@ def test_quorum_basis_parsing():
     assert quorum_basis("oz", "support=bravo&quorum=for,abstain&params=fractional") == ("for", "abstain")
     assert quorum_basis("oz", "support=approval&quorum=for") is None      # non-standard -> Tier B
     assert quorum_basis("bravo", None) == ("for",)
+    assert quorum_basis("oz", "support=bravo&quorum=bravo") == ("for",)
+    assert quorum_basis("oz", "support=bravo,fractional&quorum=for&params=fractional") == ("for",)
+    assert quorum_basis("oz", "support=against,for&quorum=for&success=quorum") is None
+    from hn.outcome import is_election
+    assert is_election("support=for&params=account&counting=n-winners")
+    assert not is_election("support=bravo&quorum=for,abstain")
 
 
 def test_passes_and_mechanism():

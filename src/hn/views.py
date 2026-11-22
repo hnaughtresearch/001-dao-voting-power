@@ -58,10 +58,10 @@ def tallies(rpc: Rpc, gov: str, fam: str, pid: int, block) -> dict | None:
     """{'for','against','abstain'} as ints, from the contract's own storage."""
     if fam == "oz":
         raw = _call(rpc, gov, FN["proposalVotes"], ["uint256"], [pid], block)
-        if not raw or len(raw) < 96:
-            return None
-        a, f, ab = abi_decode(["uint256", "uint256", "uint256"], raw[:96])
-        return {"for": f, "against": a, "abstain": ab}
+        if raw and len(raw) >= 96:
+            a, f, ab = abi_decode(["uint256", "uint256", "uint256"], raw[:96])
+            return {"for": f, "against": a, "abstain": ab}
+        # GovernorCompatibilityBravo keeps tallies in the Bravo-style proposals() struct
     raw = _call(rpc, gov, FN["proposals"], ["uint256"], [pid], block)
     if not raw:
         return None

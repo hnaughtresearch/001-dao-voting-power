@@ -417,3 +417,24 @@ The pilot script and its report are in the repository (`pilot/hypersync_pilot.py
 ### Note on Optimism
 
 Only proposals created through the standard `ProposalCreated` event were captured (26). Optimism's approval and optimistic modules create proposals through a different event. Those proposals are handled as Tier B, as Section 3 already provides.
+
+## Amendment 2 — election governors and counting-mode recognition (2026-11-22)
+
+This amendment was registered after the validation gate (Gate B) was first run and **before any concentration or outcome-sensitivity measure was computed**. It does not change hypotheses, metrics, filters or the requirement that Tier A reproduce 100% of tallies and outcomes.
+
+### 1. Election governors are outside the unit of analysis
+
+The study's unit is a proposal with a vote-stage pass/fail result (Sections 2 and 6). Some governors run candidate elections instead. Their `COUNTING_MODE()` declares a `counting=` parameter, such as `counting=n-winners` or `counting=threshold`, and there is no pass/fail outcome to recompute or to test for pivotality.
+
+Rule: governors whose `COUNTING_MODE()` contains a `counting=` parameter are excluded from the study. They are listed in `excluded_election_governors.csv` and do not affect the tier of the DAO they belong to.
+
+First application: two Arbitrum governors (`0x467923b9…`, `counting=n-winners`; `0x8a1cda8d…`, `counting=threshold`), with 6 decided votes each.
+
+### 2. Two standard OpenZeppelin counting modes added to the generic rule
+
+The pre-registered generic rule reads the counting rule from `COUNTING_MODE()`. Validation showed two standard modes that the first implementation did not parse:
+
+- `quorum=bravo` (GovernorCompatibilityBravo): quorum counts For votes only, and tallies are stored in the Bravo-style `proposals()` struct.
+- `support=bravo,fractional` (GovernorCountingFractional): standard For/Against/Abstain support with optional fractional votes. The tally check still applies: any fractional vote not reflected in the decoded tallies fails it.
+
+These are implementation corrections, recorded here for transparency. Governors using other modes (for example `success=quorum`, `support=against,for`, or `params=modules`) remain Tier B.

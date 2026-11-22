@@ -72,10 +72,18 @@ def read_governor(cfg: dict, rpc: Rpc, chain: str, gov: str, cutoff_ts: int, ts:
     head = rpc.block_number()
 
     vp = d / "views.jsonl.gz"
-    done = set()
-    if vp.exists():
+    keep = []
+    if vp.exists():                      # keep complete reads; re-read incomplete ones (repair mode)
         with gzip.open(vp, "rt") as fh:
-            done = {json.loads(l)["proposal_id"] for l in fh}
+            for l in fh:
+                r = json.loads(l)
+                if r.get("state") and r.get("tallies") and r.get("quorum") is not None:
+                    keep.append(r)
+        tmp = vp.with_suffix(".gz.tmp")
+        with gzip.open(tmp, "wt") as fh:
+            fh.writelines(json.dumps(r) + "\n" for r in keep)
+        tmp.replace(vp)
+    done = {r["proposal_id"] for r in keep}
     with gzip.open(vp, "at") as out:
         for i, p in enumerate(created, 1):
             if p["proposal_id"] in done:
