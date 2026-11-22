@@ -68,7 +68,8 @@ def run(cfg: dict) -> None:
         basis = quorum_basis(fam, cm)
         # Study window: only proposals that have contract reads (created before the cutoff).
         props = [r for r in rows if r["event"] == "ProposalCreated" and r["proposal_id"] in views]
-        votes = [r for r in rows if r["event"].startswith("VoteCast")]
+        votes = [r for r in rows if r["event"] in ("VoteCast", "VoteCastWithParams", "VoteCastAlpha")]
+        n_unparsed = sum(1 for r in rows if r["event"].endswith("_unparsed"))
         for r in props + votes:
             r["chain"] = chain
         all_p += props
@@ -120,12 +121,13 @@ def run(cfg: dict) -> None:
 
         gaps = _gaps(man["ranges"], man["start_block"], man["cutoff_block"])
         generic_ok = (n_dec > 0 and basis is not None and n_tally_ok == n_dec and n_out_ok == n_dec
-                      and not dup_pids and gaps == 0)
+                      and not dup_pids and gaps == 0 and n_unparsed == 0)
         grow.append({"chain": chain, "governor": gov, "token": man.get("token"), "family": fam,
                      "counting_mode": cm, "quorum_basis": ",".join(basis) if basis else None,
                      "n_proposals": len(props), "n_decided": n_dec,
                      "tally_match": f"{n_tally_ok}/{n_dec}", "outcome_match": f"{n_out_ok}/{n_dec}",
                      "duplicate_pairs": len(dup_pids), "uncovered_blocks": gaps,
+                     "unparsed_logs": n_unparsed,
                      "median_voters_decided": pd.Series(voters_per_decided).median() if voters_per_decided else 0,
                      "generic_rule_reproduces": generic_ok})
 

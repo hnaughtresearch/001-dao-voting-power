@@ -2,6 +2,7 @@
 
   python -m hn scan [--chains ...]    # HyperSync: every governor event on each chain (resumable)
   python -m hn select                 # frame summary, prefilters, group governors into DAOs (RPC)
+  python -m hn resolve                # infer + verify tokens of governors with unknown getters, then select again
   python -m hn collect [--dao ID ...] # per-governor logs + contract reads at latest block (RPC)
   python -m hn validate               # decode, validation gate, exact filters, Tier A / B, funnel
 """
@@ -33,7 +34,7 @@ def make_rpcs(cfg: dict, chains: list[str]):
 
 def main() -> None:
     ap = argparse.ArgumentParser(prog="hn")
-    ap.add_argument("step", choices=["scan", "select", "collect", "validate"])
+    ap.add_argument("step", choices=["scan", "select", "resolve", "collect", "validate"])
     ap.add_argument("--chains", nargs="*", help="subset of chains from config.yaml")
     ap.add_argument("--dao", nargs="*", help="collect: only these dao_ids (chain:token)")
     a = ap.parse_args()
@@ -47,6 +48,9 @@ def main() -> None:
     elif a.step == "select":
         from . import select
         select.run(cfg, make_rpcs(cfg, chains), chains)
+    elif a.step == "resolve":
+        from . import resolve
+        resolve.run(cfg, make_rpcs(cfg, chains), chains)
     elif a.step == "collect":
         from . import collect
         collect.run(cfg, make_rpcs(cfg, chains), a.dao)

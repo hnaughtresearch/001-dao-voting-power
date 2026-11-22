@@ -30,7 +30,19 @@ def _safe_decode(types: list[str], data: bytes) -> list:
 
 
 def decode_log(log: dict) -> dict | None:
-    """Return a normalised event row, or None for unknown topics."""
+    """Return a normalised event row, None for unknown topics, or event '<Name>_unparsed'
+    when topic0 matches but the field layout does not (e.g. indexed parameters)."""
+    try:
+        return _decode(log)
+    except Exception:
+        topics = log["topics"]
+        name = TOPIC_TO_NAME.get(topics[0].lower()) if topics else "Unknown"
+        return {"event": f"{name}_unparsed", "governor": log["address"].lower(),
+                "block": int(log["blockNumber"], 16), "tx": log["transactionHash"],
+                "log_index": int(log["logIndex"], 16)}
+
+
+def _decode(log: dict) -> dict | None:
     topics = log["topics"]
     name = TOPIC_TO_NAME.get(topics[0].lower()) if topics else None
     if name is None:
@@ -61,7 +73,11 @@ def decode_log(log: dict) -> dict | None:
     elif name == "ProposalQueued":
         v = abi_decode(["uint256", "uint256"], data)
         base.update(proposal_id=str(v[0]), eta=str(v[1]))
-    else:  # ProposalExecuted / ProposalCanceled
-        v = abi_decode(["uint256"], data)
-        base.update(proposal_id=str(v[0]))
+    else:  # ProposalExecuted / ProposalCanceled; some forks index the id
+        if len(data) >= 32:
+            base.update(proposal_id=str(abi_decode(["uint256"], data[:32])[0]))
+        elif len(topics) >= 2:
+            base.update(proposal_id=str(int(topics[1], 16)))
+        else:
+            raise ValueError("no proposal id")
     return base

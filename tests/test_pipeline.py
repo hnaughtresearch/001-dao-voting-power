@@ -195,3 +195,39 @@ def test_collect_split_writes_complete_files(tmp_path, monkeypatch):
     f = tmp_path / "data" / "interim" / "ethereum" / GOV / "logs.jsonl.gz"
     lines = gzip.open(f, "rt").read().splitlines()
     assert f.exists() and not f.with_suffix(".gz.part").exists() and len(lines) == 2
+
+
+def test_indexed_id_variants_do_not_crash():
+    from hn.select import _word0_or_topic1
+    pid_topic = "0x" + format(77, "064x")
+    lg = {"address": GOV, "topics": [TOPIC["ProposalExecuted"], pid_topic], "data": "0x",
+          "blockNumber": "0x1", "transactionHash": "0x01", "logIndex": "0x0"}
+    assert _word0_or_topic1(lg) == "77"
+    assert decode_log(lg)["proposal_id"] == "77"
+    bad_vote = {"address": GOV, "topics": [TOPIC["VoteCast"]], "data": "0x1234",
+                "blockNumber": "0x1", "transactionHash": "0x02", "logIndex": "0x1"}
+    assert decode_log(bad_vote)["event"] == "VoteCast_unparsed"
+
+
+def test_select_counts_unparsed(tmp_path, monkeypatch):
+    from hn import hs, select
+    monkeypatch.setattr(hs, "ROOT", tmp_path)
+    bad = {"address": GOV, "topics": [TOPIC["VoteCast"]], "data": "0x",
+           "blockNumber": "0x5", "transactionHash": "0x03", "logIndex": "0x2"}
+    p1 = created(1); p1["blockNumber"] = hex(100)
+    _write_scan(tmp_path, "ethereum", [p1, bad], {100: 1_000})
+    df = select.summarise_chain("ethereum", cutoff_ts=2_000, rpc=None)
+    assert df[df.addr == GOV].iloc[0].n_unparsed == 1
+
+
+def test_resolve_verify_matches_vote_weight():
+    from hn import resolve
+    class FakeRpc: pass
+    rpc = FakeRpc()
+    props = {"1": {"start_block": 50, "block": 40}}
+    votes = [{"proposal_id": "1", "voter": VOTER, "weight": "30"}]
+    resolve._votes_at = lambda r, tok, voter, block: 30 if block == 50 else 0
+    assert resolve._verify(rpc, GOV, "0x" + "11" * 20, "bravo", props, votes) == (1, 1)
+    resolve._votes_at = lambda r, tok, voter, block: 29
+    assert resolve._verify(rpc, GOV, "0x" + "11" * 20, "bravo", props, votes) == (0, 1)
+    assert resolve._addr_topic(VOTER) == _voter_topic(VOTER)

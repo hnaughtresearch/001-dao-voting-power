@@ -40,6 +40,16 @@ def proposal_block_ts(chain: str) -> dict[int, int]:
     return out
 
 
+def _word0_or_topic1(lg: dict) -> str:
+    """Proposal id of ProposalExecuted/Canceled/Created: first data word, or topics[1] if indexed."""
+    data = lg["data"]
+    if len(data) >= 66:
+        return str(int(data[2:66], 16))
+    if len(lg["topics"]) >= 2:
+        return str(int(lg["topics"][1], 16))
+    raise ValueError("no proposal id")
+
+
 def _pid_and_voter(lg: dict, name: str) -> tuple[str, str]:
     data = lg["data"]
     if name == "VoteCastAlpha":       # nothing indexed: voter, proposalId in data words 0-1
@@ -53,32 +63,40 @@ def summarise_chain(chain: str, cutoff_ts: int, rpc: Rpc | None) -> pd.DataFrame
     created = defaultdict(dict)            # addr -> {pid: created_ts}
     votes = defaultdict(lambda: defaultdict(int))   # addr -> pid -> n votes
     execs, cancels, nvotes_all = defaultdict(set), defaultdict(set), defaultdict(int)
+    unparsed = defaultdict(int)        # same topic0 but a different field layout (indexed params etc.)
     missing_ts = 0
     for lg in iter_raw(chain):
         name = TOPIC_TO_NAME.get(lg["topics"][0].lower()) if lg["topics"] else None
         if name is None:
             continue
         a = lg["address"].lower()
-        if name == "ProposalCreated":
-            b = int(lg["blockNumber"], 16)
-            t = ts.get(b)
-            if t is None and rpc is not None:          # fallback if the block join was incomplete
-                t = ts[b] = rpc.block_timestamp(b)
-                missing_ts += 1
-            created[a][str(int(lg["data"][2:66], 16))] = t
-        elif name.startswith("VoteCast"):
-            pid, _ = _pid_and_voter(lg, name)
-            votes[a][pid] += 1
-            nvotes_all[a] += 1
-        elif name == "ProposalExecuted":
-            execs[a].add(str(int(lg["data"][2:66], 16)))
-        elif name == "ProposalCanceled":
-            cancels[a].add(str(int(lg["data"][2:66], 16)))
+        try:
+            if name == "ProposalCreated":
+                pid = _word0_or_topic1(lg)
+                b = int(lg["blockNumber"], 16)
+                t = ts.get(b)
+                if t is None and rpc is not None:      # fallback if the block join was incomplete
+                    t = ts[b] = rpc.block_timestamp(b)
+                    missing_ts += 1
+                created[a][pid] = t
+            elif name.startswith("VoteCast"):
+                pid, _ = _pid_and_voter(lg, name)
+                votes[a][pid] += 1
+                nvotes_all[a] += 1
+            elif name == "ProposalExecuted":
+                execs[a].add(_word0_or_topic1(lg))
+            elif name == "ProposalCanceled":
+                cancels[a].add(_word0_or_topic1(lg))
+        except (ValueError, IndexError):
+            unparsed[a] += 1
     if missing_ts:
         print(f"[{chain}] {missing_ts} proposal timestamps fetched by RPC (block join fallback)")
 
     rows = []
-    for a in set(created) | set(nvotes_all):
+    if unparsed:
+        print(f"[{chain}] {sum(unparsed.values())} logs with a non-standard layout in {len(unparsed)} contracts "
+              f"(counted in column n_unparsed)")
+    for a in set(created) | set(nvotes_all) | set(unparsed):
         in_window = {p: t for p, t in created.get(a, {}).items() if t is not None and t < cutoff_ts}
         vc = [votes[a].get(p, 0) for p in in_window]
         rows.append({
@@ -87,6 +105,7 @@ def summarise_chain(chain: str, cutoff_ts: int, rpc: Rpc | None) -> pd.DataFrame
             "n_executed": len(execs[a] & set(in_window)),
             "n_canceled": len(cancels[a] & set(in_window)),
             "n_votes": nvotes_all[a],
+            "n_unparsed": unparsed.get(a, 0),
             "median_votes_per_proposal": float(pd.Series(vc).median()) if vc else 0.0,
             "first_ts": min(in_window.values()) if in_window else None,
             "last_ts": max(in_window.values()) if in_window else None,

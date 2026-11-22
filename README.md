@@ -27,6 +27,9 @@ instead of the public defaults in `config.yaml`.
 ```powershell
 py -m hn scan                 # every governor-family event on Ethereum, Arbitrum One, OP Mainnet
 py -m hn select               # frame summary, prefilters, group governors into DAOs by voting token
+py -m hn resolve              # governors with unknown token getter: infer token from DelegateVotesChanged,
+                              # verify against vote weights, write config/token_overrides.csv
+py -m hn select               # again, now with the verified overrides
 py -m hn collect --dao ethereum:0x1f9840a85d5af5bf1d1762f925bdaddc4201f984   # trial on Uniswap
 py -m hn validate             # check the trial: tally_match and outcome_match must be n/n
 py -m hn collect              # all DAOs passing the prefilters
