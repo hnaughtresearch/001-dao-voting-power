@@ -1,4 +1,4 @@
-"""Step 4 · Decode raw data into processed tables, run validation gate, assign tiers.
+"""Step 4 · Decode per-governor data into processed tables, run validation gate, assign tiers.
 
 Outputs (data/processed/):
   proposals.parquet, votes.parquet         decoded, de-duplicated
@@ -61,12 +61,13 @@ def run(cfg: dict) -> None:
     out = ROOT / "data" / "processed"
     all_p, all_v, prow, grow = [], [], [], []
 
-    for d in sorted((ROOT / "data" / "raw").glob("*/0x*")):
+    for d in sorted((ROOT / "data" / "interim").glob("*/0x*")):
         man, rows, views = _load_governor(d)
         chain, gov = man["chain"], man["governor"]
         fam, cm = man.get("family"), man.get("counting_mode")
         basis = quorum_basis(fam, cm)
-        props = [r for r in rows if r["event"] == "ProposalCreated"]
+        # Study window: only proposals that have contract reads (created before the cutoff).
+        props = [r for r in rows if r["event"] == "ProposalCreated" and r["proposal_id"] in views]
         votes = [r for r in rows if r["event"].startswith("VoteCast")]
         for r in props + votes:
             r["chain"] = chain

@@ -61,15 +61,13 @@ def test_decode_invalid_utf8_description():
     assert decode_log(good)["proposal_id"] == "1"
 
 
-def test_sql_substring_offsets_match_abi_layout():
-    """frame_governors.sql uses 1-based SUBSTR offsets on '0x'-prefixed hex."""
+def test_select_pid_voter_offsets_match_abi_layout():
+    """select._pid_and_voter slices raw hex without full ABI decoding."""
+    from hn.select import _pid_and_voter
     data = "0x" + encode(["address", "uint256", "bool", "uint256"], [VOTER, 42, True, 1]).hex()
-    sub = lambda s, start, n: s[start - 1:start - 1 + n]
-    assert "0x" + sub(data, 27, 40) == VOTER          # Alpha voter
-    assert int(sub(data, 67, 64), 16) == 42           # Alpha proposalId
+    assert _pid_and_voter({"data": data, "topics": [TOPIC["VoteCastAlpha"]]}, "VoteCastAlpha") == ("42", VOTER)
     d2 = "0x" + encode(["uint256", "uint8", "uint256", "string"], [42, 1, 1, ""]).hex()
-    assert int(sub(d2, 3, 64), 16) == 42              # Bravo/OZ proposalId
-    assert "0x" + sub(_voter_topic(VOTER), 27, 40) == VOTER
+    assert _pid_and_voter({"data": d2, "topics": [TOPIC["VoteCast"], _voter_topic(VOTER)]}, "VoteCast") == ("42", VOTER)
 
 
 # --- outcome rules --------------------------------------------------------------
@@ -118,7 +116,7 @@ def test_gaps():
 # --- end-to-end validate on synthetic raw data ---------------------------------
 def test_validate_end_to_end(tmp_path, monkeypatch):
     monkeypatch.setattr(validate, "ROOT", tmp_path)
-    d = tmp_path / "data" / "raw" / "ethereum" / GOV
+    d = tmp_path / "data" / "interim" / "ethereum" / GOV
     d.mkdir(parents=True)
     (tmp_path / "data" / "processed").mkdir(parents=True)
     v2 = "0x" + "ee" * 20
@@ -149,3 +147,51 @@ def test_validate_end_to_end(tmp_path, monkeypatch):
     assert bool(row.generic_rule_reproduces) is True
     daos = __import__("pandas").read_csv(tmp_path / "data" / "processed" / "daos_final.csv")
     assert daos.iloc[0].tier == "A"
+
+
+# --- HyperSync scan output -> select / collect --------------------------------
+def _write_scan(root, chain, logs, ts):
+    d = root / "data" / "raw" / "hypersync" / chain
+    (d / "events").mkdir(parents=True)
+    with gzip.open(d / "events" / "part-000000000000-000000000300.jsonl.gz", "wt") as fh:
+        for lg in logs:
+            fh.write(json.dumps(lg) + "\n")
+    with gzip.open(d / "proposal_blocks.jsonl.gz", "wt") as fh:
+        for b, t in ts.items():
+            fh.write(json.dumps({"block": b, "timestamp": t}) + "\n")
+    (d / "manifest.json").write_text(json.dumps({"chain": chain, "source": "test", "scan_height": 301,
+                                                 "ranges": [[0, 301]], "n_logs": len(logs)}))
+
+
+def test_to_rpc_shape_drops_empty_topics():
+    from hn.hs import to_rpc_shape
+    class L: pass
+    lg = L(); lg.address = GOV; lg.topics = [TOPIC["VoteCast"], _voter_topic(VOTER), None, None]
+    lg.data = "0x"; lg.block_number = 7; lg.transaction_hash = "0x01"; lg.log_index = 3
+    r = to_rpc_shape(lg)
+    assert r["topics"] == [TOPIC["VoteCast"], _voter_topic(VOTER)] and r["blockNumber"] == "0x7"
+
+
+def test_select_summary_respects_cutoff(tmp_path, monkeypatch):
+    from hn import hs, select
+    monkeypatch.setattr(hs, "ROOT", tmp_path)
+    p1, p2 = created(1), created(2)
+    p1["blockNumber"], p2["blockNumber"] = hex(100), hex(200)
+    logs = [p1, vote(1, 1, 5, VOTER, 1, "0x10"), p2, vote(2, 1, 5, VOTER, 2, "0x11")]
+    _write_scan(tmp_path, "ethereum", logs, {100: 1_000, 200: 3_000})
+    df = select.summarise_chain("ethereum", cutoff_ts=2_000, rpc=None)
+    row = df[df.addr == GOV].iloc[0]
+    assert row.n_created_std == 1            # proposal 2 created after the cutoff is excluded
+    assert row.median_votes_per_proposal == 1
+
+
+def test_collect_split_writes_complete_files(tmp_path, monkeypatch):
+    from hn import hs, collect
+    monkeypatch.setattr(hs, "ROOT", tmp_path)
+    monkeypatch.setattr(collect, "ROOT", tmp_path)
+    other = dict(created(9)); other["address"] = "0x" + "99" * 20
+    _write_scan(tmp_path, "ethereum", [created(1), vote(1, 1, 5), other], {})
+    collect._split("ethereum", {GOV})
+    f = tmp_path / "data" / "interim" / "ethereum" / GOV / "logs.jsonl.gz"
+    lines = gzip.open(f, "rt").read().splitlines()
+    assert f.exists() and not f.with_suffix(".gz.part").exists() and len(lines) == 2

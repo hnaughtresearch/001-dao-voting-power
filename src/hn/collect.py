@@ -1,129 +1,127 @@
-"""Step 3 · Extract raw logs and contract state by RPC. Raw data is written once, never edited.
+"""Step 3 · Per-governor extraction and contract reads (ordinary RPC, latest block).
 
-Layout:
-  data/raw/<chain>/<governor>/logs.jsonl.gz      every raw log, as returned by eth_getLogs
-  data/raw/<chain>/<governor>/manifest.json      covered block ranges, counts, sha256, endpoints
-  data/raw/<chain>/<governor>/views.jsonl.gz     per-proposal contract reads at the cutoff block
-Resumable: re-running continues from the last covered block.
+For every governor of a DAO passing the prefilters:
+  data/interim/<chain>/<governor>/logs.jsonl.gz    its logs, copied from the raw HyperSync pages
+  data/interim/<chain>/<governor>/views.jsonl.gz   per proposal: state, tallies, quorum, snapshot
+  data/interim/<chain>/<governor>/manifest.json    coverage (from the chain scan), family, token
+Why the latest block is enough: Bravo and OZ governors store final tallies permanently; OZ
+quorum(timepoint) reads historical checkpoints; the vote-stage result (passed vs defeated) of
+a finished proposal does not change. Proposals still Pending/Active at read time are recorded
+and excluded by `validate`. Resumable per proposal.
 """
 from __future__ import annotations
 
 import datetime as dt
 import gzip
-import hashlib
 import json
+from collections import defaultdict
 from pathlib import Path
 
 import pandas as pd
 
-from .constants import ALL_TOPICS
 from .decode import decode_log
-from .rpc import Rpc, block_at_or_before
+from .hs import chain_dir
+from .rpc import Rpc
+from .select import iter_raw, proposal_block_ts
 from . import views
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def cutoff_blocks(cfg: dict, rpcs: dict[str, Rpc]) -> dict[str, int]:
-    path = ROOT / "data" / "raw" / "cutoff_blocks.json"
-    cache = json.loads(path.read_text()) if path.exists() else {}
-    ts = int(dt.datetime.fromisoformat(cfg["cutoff_utc"]).replace(tzinfo=dt.timezone.utc).timestamp())
-    for chain, rpc in rpcs.items():
-        key = f"{chain}@{cfg['cutoff_utc']}"
-        if key not in cache:
-            cache[key] = block_at_or_before(rpc, ts - 1)
-            print(f"[{chain}] cutoff block {cache[key]}")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(cache, indent=2))
-    return {c: cache[f"{c}@{cfg['cutoff_utc']}"] for c in rpcs}
+def _split(chain: str, govs: set[str]) -> None:
+    """One pass over the raw pages, writing each selected governor's logs to its own file."""
+    todo = {g for g in govs if not (ROOT / "data" / "interim" / chain / g / "logs.jsonl.gz").exists()}
+    if not todo:
+        return
+    print(f"[{chain}] extracting logs for {len(todo)} governors …")
+    part = {g: ROOT / "data" / "interim" / chain / g / "logs.jsonl.gz.part" for g in todo}
+    for g, p in part.items():
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.unlink(missing_ok=True)                    # discard leftovers of an interrupted run
+    buf = defaultdict(list)
+
+    def flush(g):
+        with gzip.open(part[g], "at") as fh:         # appended gzip members read back as one stream
+            fh.writelines(json.dumps(lg) + "\n" for lg in buf[g])
+        buf[g].clear()
+
+    for lg in iter_raw(chain):
+        a = lg["address"].lower()
+        if a in todo:
+            buf[a].append(lg)
+            if len(buf[a]) >= 20_000:
+                flush(a)
+    for g in todo:
+        flush(g)
+        part[g].replace(part[g].with_suffix(""))     # atomic: logs.jsonl.gz exists only when complete
 
 
-def _sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def collect_governor(cfg: dict, rpc: Rpc, chain: str, gov: str, start: int, cutoff: int) -> None:
-    d = ROOT / "data" / "raw" / chain / gov
-    d.mkdir(parents=True, exist_ok=True)
-    man_p = d / "manifest.json"
-    man = json.loads(man_p.read_text()) if man_p.exists() else {
-        "chain": chain, "governor": gov, "cutoff_utc": cfg["cutoff_utc"], "cutoff_block": cutoff,
-        "start_block": start, "ranges": [], "n_logs": 0}
-    if man["cutoff_block"] != cutoff:
-        raise SystemExit(f"{gov}: manifest cutoff {man['cutoff_block']} != {cutoff}; use a fresh data dir")
-    cur = man["ranges"][-1][1] + 1 if man["ranges"] else start
-
-    if cur <= cutoff:
-        with gzip.open(d / "logs.jsonl.gz", "at") as out:
-            for lo, hi, logs in rpc.get_logs(gov, ALL_TOPICS, cur, cutoff, int(cfg["rpc"]["log_chunk_blocks"][chain])):
-                for lg in logs:
-                    out.write(json.dumps(lg) + "\n")
-                man["ranges"].append([lo, hi])
-                man["n_logs"] += len(logs)
-                man_p.write_text(json.dumps(man))       # checkpoint after every chunk
-                print(f"  {gov} blocks {lo}-{hi}: {len(logs)} logs", end="\r")
-        print()
-
-    # Contract reads per proposal, at the cutoff block (needs an archive node for past blocks).
+def read_governor(cfg: dict, rpc: Rpc, chain: str, gov: str, cutoff_ts: int, ts: dict) -> None:
+    d = ROOT / "data" / "interim" / chain / gov
+    scan = json.loads((chain_dir(chain) / "manifest.json").read_text())
     created = []
     with gzip.open(d / "logs.jsonl.gz", "rt") as fh:
         for line in fh:
-            row = decode_log(json.loads(line))
-            if row and row["event"] == "ProposalCreated":
-                created.append(row)
-    fam, cm = views.family(rpc, gov, cutoff)
-    tok, getter = views.voting_token(rpc, gov, cutoff)
-    done = set()
+            r = decode_log(json.loads(line))
+            if r and r["event"] == "ProposalCreated":
+                r["created_ts"] = ts.get(r["block"]) or rpc.block_timestamp(r["block"])
+                if r["created_ts"] < cutoff_ts:
+                    created.append(r)
+    fam, cm = views.family(rpc, gov)
+    tok, getter = views.voting_token(rpc, gov)
+    head = rpc.block_number()
+
     vp = d / "views.jsonl.gz"
+    done = set()
     if vp.exists():
         with gzip.open(vp, "rt") as fh:
             done = {json.loads(l)["proposal_id"] for l in fh}
     with gzip.open(vp, "at") as out:
-        for i, p in enumerate(created):
+        for i, p in enumerate(created, 1):
             if p["proposal_id"] in done:
                 continue
             pid = int(p["proposal_id"])
-            snap = views.proposal_snapshot(rpc, gov, pid, cutoff) if fam == "oz" else p["start_block"]
-            rec = {
+            snap = views.proposal_snapshot(rpc, gov, pid, "latest") if fam == "oz" else p["start_block"]
+            t = views.tallies(rpc, gov, fam, pid, "latest")
+            q = views.quorum(rpc, gov, fam, snap, "latest")
+            out.write(json.dumps({
                 "proposal_id": p["proposal_id"], "family": fam, "counting_mode": cm,
-                "state": views.state(rpc, gov, pid, cutoff),
-                "tallies": {k: str(v) for k, v in (views.tallies(rpc, gov, fam, pid, cutoff) or {}).items()},
-                "snapshot": snap,
-                "quorum": str(views.quorum(rpc, gov, fam, snap, cutoff)),
-                "created_block_ts": rpc.block_timestamp(p["block"]),
-                "read_at_block": cutoff,
-            }
-            out.write(json.dumps(rec) + "\n")
-            print(f"  views {i + 1}/{len(created)}", end="\r")
+                "state": views.state(rpc, gov, pid, "latest"),
+                "tallies": {k: str(v) for k, v in (t or {}).items()},
+                "snapshot": snap, "quorum": None if q is None else str(q),
+                "created_block": p["block"], "created_block_ts": p["created_ts"],
+                "read_at_block": head,
+            }) + "\n")
+            print(f"   {gov[:10]}… views {i}/{len(created)}", end="\r")
     print()
 
-    man.update(family=fam, counting_mode=cm, token=tok, token_getter=getter,
-               n_proposals=len(created), logs_sha256=_sha256(d / "logs.jsonl.gz"),
-               views_sha256=_sha256(vp), rpc_host=rpc.url.split("/")[2],
-               finished_utc=dt.datetime.now(dt.timezone.utc).isoformat())
-    man_p.write_text(json.dumps(man, indent=1))
+    (d / "manifest.json").write_text(json.dumps({
+        "chain": chain, "governor": gov, "family": fam, "counting_mode": cm, "token": tok,
+        "token_getter": getter, "n_proposals_in_window": len(created),
+        "start_block": 0, "cutoff_block": scan["scan_height"] - 1,
+        "ranges": [[lo, hi - 1] for lo, hi in scan["ranges"]],     # inclusive form for validate
+        "source": scan["source"], "rpc_host": rpc.url.split("/")[2],
+        "cutoff_utc": cfg["cutoff_utc"],
+        "finished_utc": dt.datetime.now(dt.timezone.utc).isoformat()}, indent=1))
 
 
 def run(cfg: dict, rpcs: dict[str, Rpc], only: list[str] | None) -> None:
     cand = ROOT / "data" / "processed" / "dao_candidates.json"
     if not cand.exists():
-        raise SystemExit("missing dao_candidates.json: run `hn frame --execute` and `hn select` first")
-    if not rpcs:
-        raise SystemExit("no RPC endpoints: set ETH_RPC_URL / ARB_RPC_URL / OP_RPC_URL")
-    cut = cutoff_blocks(cfg, rpcs)
+        raise SystemExit("missing dao_candidates.json: run `hn scan` and `hn select` first")
+    cutoff_ts = int(dt.datetime.fromisoformat(cfg["cutoff_utc"]).replace(tzinfo=dt.timezone.utc).timestamp())
     daos = pd.read_json(cand)
     daos = daos[daos.passes_prefilters]
     if only:
         daos = daos[daos.dao_id.isin(only)]
-    frame = pd.concat([pd.read_parquet(p) for p in (ROOT / "data" / "raw" / "frame").glob("*.parquet")])
-    first = {(r.chain, r.addr): int(r.first_block) for r in frame.itertuples()}
-    for d in daos.itertuples():
-        if d.chain not in rpcs:
+    for ch, sub in daos.groupby("chain"):
+        if ch not in rpcs:
+            print(f"skip {ch}: no RPC")
             continue
-        print(f"== {d.dao_id} ({len(d.governors)} governor(s))")
-        for g in d.governors:
-            collect_governor(cfg, rpcs[d.chain], d.chain, g, first[(d.chain, g)], cut[d.chain])
+        govs = {g for gl in sub.governors for g in gl}
+        _split(ch, govs)
+        ts = proposal_block_ts(ch)
+        for d in sub.itertuples():
+            print(f"== {d.dao_id} ({len(d.governors)} governor(s))")
+            for g in d.governors:
+                read_governor(cfg, rpcs[ch], ch, g, cutoff_ts, ts)

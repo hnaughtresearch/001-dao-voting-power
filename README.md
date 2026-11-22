@@ -1,75 +1,85 @@
 # H Naught Research 001 — data collection
 
 Collects on-chain governance data for *How Concentrated Is DAO Voting Power?* following the
-research design (Section 3: frame → filters → Tier A / Tier B). Nothing here computes
-concentration metrics; that comes after the validation gate passes.
+research design (Section 3: frame → filters → Tier A / Tier B, and Amendment 1). Nothing here
+computes concentration metrics; that comes only after the validation gate passes.
 
-## What you need
+**No paid service is needed.** Logs come from [Envio HyperSync](https://docs.envio.dev/docs/HyperSync/overview)
+(free token, no card). Contract state is read at the latest block through ordinary public RPC
+endpoints (no archive node).
 
-- Python 3.11+ and `pip install -r requirements.txt`
-- A Google Cloud project with BigQuery enabled, authenticated locally
-  (`gcloud auth application-default login`). Only step 1 uses it; it is billed per TB scanned.
-- **Archive** RPC endpoints, exported as environment variables:
-  `ETH_RPC_URL`, `ARB_RPC_URL`, `OP_RPC_URL`. Archive is required because contract state
-  (`state()`, tallies, quorum) is read at the fixed cutoff block, not at "latest".
+## Setup (Windows PowerShell)
 
-Set the BigQuery billing project with `export HN_BQ_PROJECT=<id>` (not in `config.yaml`, so it never reaches git). The cutoff, filters and chain list are part of
-the pre-registration — change them only in a dated commit.
+```powershell
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+$env:PYTHONPATH = "src"
+$env:HYPERSYNC_TOKEN = "<free token from envio.dev>"
+py -m pytest -q
+```
+
+Optional: `$env:ETH_RPC_URL`, `$env:ARB_RPC_URL`, `$env:OP_RPC_URL` to use your own RPC
+instead of the public defaults in `config.yaml`.
 
 ## Run, in order
 
-```bash
-export PYTHONPATH=src
-python -m hn schema                 # free: confirms the BigQuery logs tables have the expected columns
-python -m hn frame                  # free dry run: prints TB scanned and estimated $ per chain
-python -m hn frame --execute        # billed: enumerates every contract with governor vote events
-python -m hn select                 # RPC: resolve voting token, group governors into DAOs, prefilters
-python -m hn collect                # RPC: raw logs + contract reads for DAOs passing prefilters (resumable)
-python -m hn validate               # offline: decode, validation gate, exact filters, Tier A/B, funnel
-pytest -q                           # offline tests of decoding, rules, chunking and validation
+```powershell
+py -m hn scan                 # every governor-family event on Ethereum, Arbitrum One, OP Mainnet
+py -m hn select               # frame summary, prefilters, group governors into DAOs by voting token
+py -m hn collect --dao ethereum:0x1f9840a85d5af5bf1d1762f925bdaddc4201f984   # trial on Uniswap
+py -m hn validate             # check the trial: tally_match and outcome_match must be n/n
+py -m hn collect              # all DAOs passing the prefilters
+py -m hn validate             # validation gate, exact filters, Tier A / B, funnel
 ```
 
-`collect` can be limited with `--dao ethereum:0x1f98...` and `--chains ethereum`. It checkpoints
-after every log chunk, so an interrupted run continues where it stopped.
+Every step is resumable: re-running continues where it stopped. `--chains ethereum` limits a step
+to one chain.
 
 ## What comes out
 
 | Path | Content |
 | --- | --- |
-| `data/raw/frame/<chain>.parquet` + `.query.json` | Frame: per-contract event counts; exact SQL, job id, bytes billed |
-| `data/raw/<chain>/<governor>/logs.jsonl.gz` | Every raw log as returned by the RPC (never edited) |
-| `data/raw/<chain>/<governor>/views.jsonl.gz` | Per proposal: state, tallies, quorum, snapshot, read at the cutoff block |
-| `data/raw/<chain>/<governor>/manifest.json` | Covered block ranges, counts, SHA-256 of raw files, RPC host |
-| `data/processed/funnel_prefilter.csv` | Counts after each prefilter (BigQuery counts) |
-| `data/processed/nonstandard_vote_contracts.csv` | Contracts with votes but no standard `ProposalCreated` → review for Tier B (e.g. Optimism's Agora governor) |
-| `data/processed/unresolved_token.csv` | Governors whose token getter is unknown → fill `config/token_overrides.csv` |
-| `data/processed/proposals.parquet`, `votes.parquet` | Decoded, de-duplicated tables (weights as strings: uint256) |
-| `data/processed/validation_governors.csv` | Per governor: tally match, outcome match, gaps, duplicates |
+| `data/raw/hypersync/<chain>/events/part-*.jsonl.gz` | Every governor-family log, as received; never edited |
+| `data/raw/hypersync/<chain>/proposal_blocks.jsonl.gz` | Timestamp of every `ProposalCreated` block |
+| `data/raw/hypersync/<chain>/manifest.json` | Scan height, covered block ranges, SHA-256 of every page |
+| `data/processed/frame_<chain>.parquet` | Per contract: proposals before the cutoff, votes, executions |
+| `data/processed/funnel_prefilter.csv` | Counts after each prefilter |
+| `data/processed/nonstandard_vote_contracts.csv` | Votes but no standard `ProposalCreated` → Tier B review |
+| `data/processed/unresolved_token.csv` | Token getter unknown → fill `config/token_overrides.csv` |
+| `data/interim/<chain>/<governor>/` | That governor's logs, contract reads, manifest |
+| `data/processed/validation_governors.csv` | Tally match, outcome match, gaps, duplicates per governor |
 | `data/processed/daos_final.csv`, `funnel_final.csv` | Exact filters and the Tier A / Tier B assignment |
+
+## Design choices (see Amendment 1 in `research_design.md`)
+
+- **Cutoff:** a proposal is in the study if it was created before `cutoff_utc`. The scan runs to the
+  HyperSync height at scan time, so votes cast after the cutoff on those proposals are included and
+  summed logs can be compared with the tallies stored in the contract.
+- **Latest-block reads:** Bravo and OZ governors keep final tallies permanently, and OZ
+  `quorum(timepoint)` reads historical checkpoints. Proposals still Pending/Active at read time are
+  excluded. A proposal cancelled after the cutoff is excluded as Canceled.
+- **Evidence for the source:** `pilot/hypersync_pilot.py` and `pilot/pilot_report.json` show HyperSync
+  logs reproducing stored tallies exactly for Uniswap, Arbitrum Core and the Optimism governor, and
+  complete history back to Compound Governor Alpha (2020).
 
 ## The validation gate (Gate B)
 
-A governor counts as reproduced by the generic rule only if, for **every** decided proposal:
+A governor is reproduced by the generic rule only if, for **every** decided proposal in the window:
 
-1. the sum of decoded vote weights by side equals the contract's stored tallies exactly;
+1. the summed vote weights per side equal the contract's stored tallies exactly;
 2. the generic rule (Bravo: For > Against and For ≥ `quorumVotes()`; OZ: rule from
    `COUNTING_MODE()`, quorum from `quorum(snapshot)`) predicts the contract's `state()`;
-3. no voter appears twice on one proposal, and the logged block ranges have no gaps.
+3. no voter appears twice on a proposal, and the scanned block ranges have no gaps.
 
-A DAO is Tier A only if all its governors pass. Anything else goes to Tier B for a
-hand-written rule. Nothing is dropped silently: every exclusion is in a CSV with its reason.
+A DAO is Tier A only if all its governors pass. Everything else goes to Tier B, with the reason in
+a CSV. Nothing is dropped silently.
 
 ## Known limits of this version
 
-- Only the Governor family (Compound Alpha/Bravo, OpenZeppelin) is decoded. Aragon (Lido, Curve)
-  and Aave decoders are Tier B work and not included yet.
-- Fractional or module votes (`VoteCastWithParams` with params, support 255) are not split; such
-  proposals fail the tally check and route the DAO to Tier B, by design.
-- Bravo `quorumVotes()` is read at the cutoff block. If a Bravo DAO changed its quorum over time,
-  the outcome check fails and flags it — then read quorum at each proposal's end block.
-- On Arbitrum, governor `startBlock`/`endBlock` values are **L1** block numbers (Arbitrum's
-  `block.number`). Timestamps here come from the L2 block of each log, which is correct.
-- BigQuery Arbitrum/Optimism datasets are in Preview; every included DAO is re-extracted by RPC,
-  so the frame only decides *what* to collect, never the data used in analysis.
-- Column names in `sql/frame_governors.sql` follow Google's Blockchain Analytics schema; run
-  `hn schema` before the first billed query.
+- Only the Governor family (Compound Alpha/Bravo, OpenZeppelin) is decoded. Aragon (Lido, Curve),
+  Aave and Optimism's non-standard proposal modules are Tier B work, not included yet.
+- Fractional or module votes (`VoteCastWithParams` with params) are not split; such proposals fail
+  the tally check and route the DAO to Tier B, by design.
+- Bravo `quorumVotes()` is read at the latest block. If a Bravo DAO changed its quorum over time,
+  the outcome check fails and flags it.

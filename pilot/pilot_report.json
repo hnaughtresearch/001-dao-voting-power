@@ -1,0 +1,81 @@
+{
+ "run_at_utc": "2026-11-22T04:21:33Z",
+ "1_ethereum": {
+  "chain_id": 1,
+  "height": 26468228,
+  "pass": true
+ },
+ "1_arbitrum": {
+  "chain_id": 42161,
+  "height": 526418633,
+  "pass": true
+ },
+ "1_optimism": {
+  "chain_id": 10,
+  "height": 159861261,
+  "pass": true
+ },
+ "2_history": {
+  "proposals_in_logs": 42,
+  "proposalCount_contract": 42,
+  "first_block": 9951904,
+  "pass": true
+ },
+ "3_uniswap_bravo": {
+  "proposals": 102,
+  "votes": 62580,
+  "duplicate_log_keys": 0,
+  "tallies_match": 102,
+  "mismatch": 0,
+  "unreadable": 0,
+  "mismatch_examples": [],
+  "seconds": 87.6,
+  "hypersync_requests": 13,
+  "pass": true
+ },
+ "4_arbitrum_core": {
+  "proposals": 34,
+  "votes": 303105,
+  "duplicate_log_keys": 0,
+  "tallies_match": 34,
+  "mismatch": 0,
+  "unreadable": 0,
+  "mismatch_examples": [],
+  "seconds": 129.7,
+  "hypersync_requests": 61,
+  "pass": true
+ },
+ "5_optimism_agora": {
+  "proposals": 26,
+  "votes": 1159642,
+  "duplicate_log_keys": 0,
+  "tallies_match": 26,
+  "mismatch": 0,
+  "unreadable": 0,
+  "mismatch_examples": [],
+  "seconds": 268.1,
+  "hypersync_requests": 215,
+  "pass": true
+ },
+ "6_ethereum": {
+  "logs": 11450,
+  "contracts": 510,
+  "requests": 6,
+  "seconds": 30.8,
+  "rate_limit": null
+ },
+ "6_arbitrum": {
+  "logs": 4261,
+  "contracts": 225,
+  "requests": 2,
+  "seconds": 8.1,
+  "rate_limit": null
+ },
+ "6_optimism": {
+  "logs": 1383,
+  "contracts": 46,
+  "requests": 1,
+  "seconds": 4.2,
+  "rate_limit": null
+ }
+}

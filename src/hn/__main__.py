@@ -1,17 +1,14 @@
-"""H Naught Research 001 · data collection CLI.
+"""H Naught Research 001 · data collection CLI (no paid services).
 
-  python -m hn schema                 # free: check BigQuery table columns
-  python -m hn frame                  # dry run: print TB scanned and estimated cost per chain
-  python -m hn frame --execute        # run the billed enumeration (respects max_bytes_billed)
-  python -m hn select                 # group governors into DAOs, apply prefilters (RPC)
-  python -m hn collect [--dao ID ...] # extract logs + contract reads (RPC, resumable)
-  python -m hn validate               # decode, validation gate, exact filters, tiers
+  python -m hn scan [--chains ...]    # HyperSync: every governor event on each chain (resumable)
+  python -m hn select                 # frame summary, prefilters, group governors into DAOs (RPC)
+  python -m hn collect [--dao ID ...] # per-governor logs + contract reads at latest block (RPC)
+  python -m hn validate               # decode, validation gate, exact filters, Tier A / B, funnel
 """
 from __future__ import annotations
 
 import argparse
 import os
-import sys
 from pathlib import Path
 
 import yaml
@@ -24,34 +21,29 @@ def load_cfg() -> dict:
 
 
 def make_rpcs(cfg: dict, chains: list[str]):
+    """RPC per chain: env var if set, else the public endpoint from config.yaml."""
     from .rpc import Rpc
     out = {}
     for c in chains:
-        url = os.environ.get(cfg["chains"][c]["rpc_env"], "")
-        if not url:
-            print(f"skip {c}: env {cfg['chains'][c]['rpc_env']} not set", file=sys.stderr)
-            continue
+        cc = cfg["chains"][c]
+        url = os.environ.get(cc["rpc_env"]) or cc["rpc_default"]
         out[c] = Rpc(url, min_interval=float(cfg["rpc"]["min_interval_s"]))
     return out
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(prog="hn")
-    ap.add_argument("step", choices=["schema", "frame", "select", "collect", "validate"])
+    ap.add_argument("step", choices=["scan", "select", "collect", "validate"])
     ap.add_argument("--chains", nargs="*", help="subset of chains from config.yaml")
-    ap.add_argument("--execute", action="store_true", help="frame: run the billed query")
     ap.add_argument("--dao", nargs="*", help="collect: only these dao_ids (chain:token)")
     a = ap.parse_args()
     cfg = load_cfg()
     chains = a.chains or list(cfg["chains"])
     (ROOT / "data" / "processed").mkdir(parents=True, exist_ok=True)
 
-    if a.step == "schema":
-        from . import frame
-        frame.schema_check(cfg)
-    elif a.step == "frame":
-        from . import frame
-        frame.run(cfg, chains, a.execute)
+    if a.step == "scan":
+        from . import hs
+        hs.run(cfg, chains)
     elif a.step == "select":
         from . import select
         select.run(cfg, make_rpcs(cfg, chains), chains)

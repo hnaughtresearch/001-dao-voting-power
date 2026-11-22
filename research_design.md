@@ -391,3 +391,29 @@ Governance rules and contracts: [Uniswap technical reference](https://developers
 Data APIs: [Snapshot Hub API](https://docs.snapshot.box/tools/api) · [Snapshot API keys](https://github.com/snapshot-labs/snapshot-docs/blob/master/tools/api/api-keys.md) · [Tally API](https://docs.tally.xyz/tally-features/welcome) · [Tally API reference](https://apidocs.tally.xyz)
 
 Prior research: [Fritsch, Müller & Wattenhofer (arXiv 2204.01176)](https://arxiv.org/abs/2204.01176) · [Feichtinger et al. (arXiv 2302.12125)](https://arxiv.org/abs/2302.12125) · [Kitzler et al. (arXiv 2309.14232)](https://arxiv.org/abs/2309.14232)
+
+## Amendment 1 — data source (2026-11-22)
+
+This amendment was registered before any data used in the analysis was collected. It changes **where the logs and contract reads come from** and how the cutoff is applied. Hypotheses, metrics, filters, tiers and the cutoff date are unchanged.
+
+### What changed and why
+
+1. **Frame enumeration and log collection: Envio HyperSync replaces BigQuery and archive-RPC `eth_getLogs`.** BigQuery dry runs of the frame query required 2.978 TB (Ethereum), 4.485 TB (Arbitrum One) and 4.078 TB (OP Mainnet). That is above the free BigQuery sandbox allowance of 1 TB per month, and the project uses no paid services. HyperSync's free tier needs no card; requests over its rate limit are rejected rather than charged.
+2. **Contract reads at the latest block through ordinary public RPC, instead of an archive node at the cutoff block.** Bravo and OZ governors store final tallies permanently, OZ `quorum(timepoint)` reads historical checkpoints, and the vote-stage result of a finished proposal does not change. Proposals still Pending or Active at read time are excluded. A proposal cancelled after the cutoff is excluded as Canceled (reported in the exclusions log).
+3. **Cutoff operationalised as proposal creation time.** A proposal is in the study if its `ProposalCreated` block timestamp is before 2026-11-01T00:00:00 UTC. The log scan runs to the HyperSync height at scan time (recorded in each chain manifest), so votes cast after the cutoff on in-window proposals are included and summed logs can be compared with stored tallies.
+
+### Evidence that the new source is complete (pilot, 2026-11-22)
+
+| Check | Result |
+| --- | --- |
+| History depth: Compound Governor Alpha `ProposalCreated` logs vs `proposalCount()` | 42 of 42; first at block 9,951,904 (2020) |
+| Uniswap Governor Bravo: summed vote weights vs stored tallies | 102 of 102 proposals match exactly (62,580 votes) |
+| Arbitrum Core Governor: same test | 34 of 34 match exactly (303,105 votes) |
+| Optimism governor, standard proposals: same test | 26 of 26 match exactly (1,159,642 votes) |
+| Topic-only `ProposalCreated` scan, full history | Ethereum 11,450 logs / 510 contracts (31 s); Arbitrum 4,261 / 225 (8 s); OP Mainnet 1,383 / 46 (4 s); rate limit never hit |
+
+The pilot script and its report are in the repository (`pilot/hypersync_pilot.py`, `pilot/pilot_report.json`). The pilot read stored tallies and counted proposals. It computed no concentration measure and no outcome-sensitivity measure.
+
+### Note on Optimism
+
+Only proposals created through the standard `ProposalCreated` event were captured (26). Optimism's approval and optimistic modules create proposals through a different event. Those proposals are handled as Tier B, as Section 3 already provides.

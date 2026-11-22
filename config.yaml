@@ -1,7 +1,7 @@
 # H Naught Research 001 · collection config. Frozen values are part of the pre-registration:
-# change them only in a new, dated commit.
+# change them only in a new, dated commit (see Amendment 1 in research_design.md).
 
-cutoff_utc: "2026-11-01T00:00:00"   # exclusive: data up to the end of 2026-10-31 UTC
+cutoff_utc: "2026-11-01T00:00:00"   # proposals created before this instant (UTC) are in the study
 
 filters:                            # pre-registered (research_design Section 3.3)
   min_decided: 20                   # decided proposals per DAO (sensitivity: 10, 40)
@@ -9,25 +9,21 @@ filters:                            # pre-registered (research_design Section 3.
   min_span_days: 365                # first to last decided proposal
   light_min_created_per_governor: 3 # only limits RPC calls in `select`; not a study filter
 
-bigquery:
-  project: "YOUR_GCP_PROJECT_ID"    # leave as is; set env HN_BQ_PROJECT instead (keeps it out of git)
-  max_bytes_billed: 3000000000000   # 3 TB hard cap per query; dry run shows the real figure
-  usd_per_tb: 6.25                  # on-demand price used only for the printed estimate [check your region]
-
 rpc:
-  min_interval_s: 0.05              # raise for rate-limited free tiers
-  log_chunk_blocks:                 # starting eth_getLogs range; halves automatically on provider limits
-    ethereum: 50000
-    arbitrum: 2000000
-    optimism: 500000
+  min_interval_s: 0.1               # polite pacing for free public endpoints
 
+# Logs: Envio HyperSync (free token, env HYPERSYNC_TOKEN). Contract reads: any ordinary RPC at
+# the latest block; set the env var to use your own endpoint instead of the public default.
 chains:
   ethereum:
-    rpc_env: ETH_RPC_URL            # must be an ARCHIVE endpoint (eth_call at the cutoff block)
-    bq_logs_table: bigquery-public-data.goog_blockchain_ethereum_mainnet_us.logs
+    hypersync_url: https://eth.hypersync.xyz
+    rpc_env: ETH_RPC_URL
+    rpc_default: https://ethereum-rpc.publicnode.com
   arbitrum:
+    hypersync_url: https://arbitrum.hypersync.xyz
     rpc_env: ARB_RPC_URL
-    bq_logs_table: bigquery-public-data.goog_blockchain_arbitrum_one_us.logs
+    rpc_default: https://arb1.arbitrum.io/rpc
   optimism:
+    hypersync_url: https://optimism.hypersync.xyz
     rpc_env: OP_RPC_URL
-    bq_logs_table: bigquery-public-data.goog_blockchain_optimism_mainnet_us.logs
+    rpc_default: https://mainnet.optimism.io
